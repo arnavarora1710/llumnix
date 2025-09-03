@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
+import uvloop
 import psutil
 from typing_extensions import ParamSpec
 import ray
@@ -443,3 +444,21 @@ def log_worker_exception(e: Exception, instance_id: str, rank: str, method_name:
                 method_name, instance_id, rank, request_id,
             )
         )
+
+# pylint: disable=unused-argument
+def _loop_on_ex(loop, context):
+    logger.exception("loop ex. context=%s", context)
+    os.abort()
+
+def _asyncio_loop_main(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+def start_asyncio_thread(name):
+    loop = uvloop.new_event_loop()
+    loop.set_exception_handler(_loop_on_ex)
+    threading.Thread(target=_asyncio_loop_main,
+                     args=(loop, ),
+                     name=name,
+                     daemon=True).start()
+    return loop
