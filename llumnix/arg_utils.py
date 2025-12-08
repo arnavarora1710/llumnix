@@ -415,6 +415,14 @@ class ManagerArgs:
     enable_bladellm_engine_pd_disagg: bool = None
     enable_bladellm_engine_semi_pd_disagg: bool = None
 
+    # bandwidth aware migration
+    enable_gpu_p2p_profiling: bool = None
+    gpu_p2p_min_blocks: int = None
+    gpu_p2p_max_blocks: int = None
+    gpu_p2p_num_samples: int = None
+    gpu_p2p_warmup_blocks: int = None
+    gpu_p2p_max_transfer_time: float = None
+
     # dispatch load metrics
     dispatch_load_metric: str = None
     dispatch_prefill_load_metric: str = None
@@ -577,6 +585,24 @@ class ManagerArgs:
         parser.add_argument('--migrate-out-threshold',
                             type=float,
                             help='migrate out instance load threshold')
+        parser.add_argument('--enable-gpu-p2p-profiling',
+                            action='store_true',
+                            help='enable GPU P2P bandwidth profiling for migration decisions')
+        parser.add_argument('--gpu-p2p-min-blocks',
+                            type=int,
+                            help='minimum number of blocks to probe during GPU P2P profiling')
+        parser.add_argument('--gpu-p2p-max-blocks',
+                            type=int,
+                            help='maximum number of blocks to probe during GPU P2P profiling')
+        parser.add_argument('--gpu-p2p-num-samples',
+                            type=int,
+                            help='number of block sizes to sample for GPU P2P profiling')
+        parser.add_argument('--gpu-p2p-warmup-blocks',
+                            type=int,
+                            help='number of warmup blocks used before profiling')
+        parser.add_argument('--gpu-p2p-max-transfer-time',
+                            type=float,
+                            help='maximum acceptable estimated transfer time (seconds) between instances')
         parser.add_argument('--enable-scaling',
                             action='store_true',
                             help='enable auto scaling')

@@ -14,7 +14,7 @@
 import asyncio
 import csv
 import os
-from typing import Dict, List, Tuple, Union, Iterable
+from typing import Dict, List, Tuple, Union, Iterable, Optional
 from functools import partial
 
 import ray
@@ -24,6 +24,7 @@ from llumnix.llumlet.llumlet import Llumlet
 from llumnix.logging.logger import init_logger
 from llumnix.global_scheduler.global_scheduler import GlobalScheduler
 from llumnix.global_scheduler.migration_filter import CustomFilter
+from llumnix.global_scheduler.gpu_p2p_profiler import GPUP2PProfiler
 from llumnix.instance_info import InstanceInfo
 from llumnix.arg_utils import (
     ManagerArgs,
@@ -103,6 +104,13 @@ class Manager:
         self.enable_pre_stop_migration = manager_args.enable_pre_stop_migration
         self.pair_migration_frequency = manager_args.pair_migration_frequency
         self.is_group_kind_migration_backend = manager_args.is_group_kind_migration_backend
+        self.enable_gpu_p2p_profiling = manager_args.enable_gpu_p2p_profiling
+        self.gpu_p2p_min_blocks = manager_args.gpu_p2p_min_blocks
+        self.gpu_p2p_max_blocks = manager_args.gpu_p2p_max_blocks
+        self.gpu_p2p_num_samples = manager_args.gpu_p2p_num_samples
+        self.gpu_p2p_warmup_blocks = manager_args.gpu_p2p_warmup_blocks
+        self.gpu_p2p_max_transfer_time = manager_args.gpu_p2p_max_transfer_time
+        self.gpu_p2p_profiler: Optional[GPUP2PProfiler] = None
 
         # prefill-decode disaggregation args
         self.enable_pd_disagg = manager_args.enable_pd_disagg
@@ -132,6 +140,9 @@ class Manager:
         self.manager_metrics = ManagerMetrics()
 
         run_coroutine_in_new_thread(self._connect_to_instances(), blocking=True)
+
+        if self.enable_gpu_p2p_profiling:
+            run_coroutine_in_new_thread(self._init_gpu_p2p_profiler(), blocking=True)
 
         asyncio.create_task(self._poll_instance_info_loop(self.polling_interval))
 
@@ -522,6 +533,66 @@ class Manager:
         # Restore migrate config
         self.enable_routine_migration = origin_routine_config
         self.enable_pre_stop_migration = origin_pre_stop_config
+
+    async def _collect_gpu_p2p_profiling_data(self):
+        profiling_data: Dict[Tuple[str, str], List[Tuple[int, float]]] = {}
+        summaries: Dict[str, Dict] = {}
+
+        async def _run_single(instance_id: str, instance_actor: Llumlet):
+            return await asyncio_wait_for_ray_remote_call_with_timeout(
+                instance_actor.profile_gpu_p2p,
+                self.gpu_p2p_min_blocks,
+                self.gpu_p2p_max_blocks,
+                self.gpu_p2p_num_samples,
+                self.gpu_p2p_warmup_blocks,
+            )
+
+        tasks = {
+            instance_id: asyncio.create_task(_run_single(instance_id, instance_actor))
+            for instance_id, instance_actor in self.instances.items()
+        }
+
+        for instance_id, task in tasks.items():
+            try:
+                result = await task
+                if result is None:
+                    continue
+                instance_profile, summary = result
+                if instance_profile:
+                    profiling_data.update(instance_profile)
+                if summary:
+                    summaries[instance_id] = summary
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("GPU P2P profiling failed on instance %s: %s", instance_id, exc, exc_info=True)
+
+        return profiling_data, summaries
+
+    async def _init_gpu_p2p_profiler(self):
+        if not self.enable_migration:
+            logger.info("Skip GPU P2P profiling because migration is disabled.")
+            return
+        if len(self.instances) < 2:
+            logger.info("Skip GPU P2P profiling because less than 2 instances are available.")
+            return
+
+        try:
+            profiling_data, summaries = await self._collect_gpu_p2p_profiling_data()
+            if not profiling_data:
+                logger.warning("GPU P2P profiling collected no data; bandwidth-aware filter will be disabled.")
+                return
+
+            profiler = GPUP2PProfiler(backend_engine=None)
+            profiler.profiling_data = profiling_data
+            profiler._build_interpolation_functions()
+            profiler._profiling_complete = True
+            self.gpu_p2p_profiler = profiler
+
+            self.global_scheduler.migration_scheduler.set_gpu_p2p_profiler(
+                profiler, self.gpu_p2p_max_transfer_time
+            )
+            logger.info("GPU P2P profiling completed with %d pairs. Summaries: %s", len(profiling_data), summaries)
+        except Exception:  # pylint: disable=broad-except
+            logger.error("GPU P2P profiling failed, continuing without bandwidth-aware filter.", exc_info=True)
 
     async def _connect_to_instances(self):
         instance_ids, instances, instance_types = await connect_to_actors_with_instance_type(

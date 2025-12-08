@@ -274,6 +274,33 @@ class Llumlet:
         executor = getattr(self.migration_coordinator, method)
         return await executor(*args, **kwargs)
 
+    async def profile_gpu_p2p(
+        self,
+        min_blocks: int = 1,
+        max_blocks: int = 100,
+        num_samples: int = 10,
+        warmup_blocks: int = 1,
+    ):
+        """
+        Run GPU P2P profiling from this instance to all other instances.
+
+        Returns:
+            Tuple of (profiling_data dict, summary dict).
+        """
+        # Local import to avoid circular dependency at actor creation time.
+        from llumnix.global_scheduler.gpu_p2p_profiler import GPUP2PProfiler
+
+        profiler = GPUP2PProfiler(self.backend_engine)
+        await profiler.run_profiling(
+            min_blocks=min_blocks,
+            max_blocks=max_blocks,
+            num_samples=num_samples,
+            warmup_blocks=warmup_blocks,
+            source_node_id=self.instance_id,
+        )
+        summary = profiler.get_profiling_summary()
+        return profiler.profiling_data, summary
+
     async def call_engine_utility_async(self, method: str, *args) -> Any:
         """Call engine utility function for backend vLLM v1."""
         # As per the hint, the target object containing utility functions is self.backend_engine.engine.

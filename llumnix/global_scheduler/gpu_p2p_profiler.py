@@ -137,6 +137,7 @@ class GPUP2PProfiler:
         max_blocks: int = 100,
         num_samples: int = 10,
         warmup_blocks: int = 1,
+        source_node_id: Optional[str] = None,
     ) -> None:
         """
         Run the initial profiling phase that sends incrementally larger KV cache
@@ -147,6 +148,7 @@ class GPUP2PProfiler:
             max_blocks: Maximum number of blocks to profile
             num_samples: Number of different block sizes to test
             warmup_blocks: Number of blocks for warmup transfer (to initialize connections)
+            source_node_id: If provided, only profile transfers from this node to others.
         """
         logger.info("Starting GPU P2P profiling phase")
         
@@ -179,6 +181,8 @@ class GPUP2PProfiler:
             logger.info("Running warmup transfers...")
             for src_node_id, src_actor in instance_actors.items():
                 for dst_node_id, dst_actor in instance_actors.items():
+                    if source_node_id and src_node_id != source_node_id:
+                        continue
                     if src_node_id != dst_node_id:
                         try:
                             await self._profile_pair(
@@ -190,6 +194,8 @@ class GPUP2PProfiler:
         # Profile all pairs
         tasks = []
         for src_node_id, src_actor in instance_actors.items():
+            if source_node_id and src_node_id != source_node_id:
+                continue
             for dst_node_id, dst_actor in instance_actors.items():
                 if src_node_id != dst_node_id:
                     task = self._profile_pair(

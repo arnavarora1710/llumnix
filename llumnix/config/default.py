@@ -176,6 +176,18 @@ _C.MANAGER.PAIR_MIGRATION_FREQUENCY = 1
 _C.MANAGER.PAIR_MIGRATION_POLICY = 'defrag'
 # Migrate out instance load threshold
 _C.MANAGER.MIGRATE_OUT_THRESHOLD = -3.0
+# Enable GPU P2P profiling for bandwidth-aware migration
+_C.MANAGER.ENABLE_GPU_P2P_PROFILING = False
+# Minimum number of blocks to probe during GPU P2P profiling
+_C.MANAGER.GPU_P2P_MIN_BLOCKS = 1
+# Maximum number of blocks to probe during GPU P2P profiling
+_C.MANAGER.GPU_P2P_MAX_BLOCKS = 100
+# Number of block sizes to sample during GPU P2P profiling
+_C.MANAGER.GPU_P2P_NUM_SAMPLES = 10
+# Number of warmup blocks before profiling
+_C.MANAGER.GPU_P2P_WARMUP_BLOCKS = 1
+# Maximum acceptable estimated transfer time (seconds) for migration pairs
+_C.MANAGER.GPU_P2P_MAX_TRANSFER_TIME = None
 
 # --------------------------- SCALING CONFIGURATION ---------------------------
 # Enable auto scaling

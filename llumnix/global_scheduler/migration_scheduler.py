@@ -17,7 +17,7 @@ from llumnix.logging.logger import init_logger
 from llumnix.instance_info import InstanceInfo
 from llumnix.load_computation import DummyLoad
 from llumnix.global_scheduler.migration_filter import (MigrationFilterPipeline, MigrationFilterConfig,
-                                                       CustomFilter, MigrationFilterFactory)
+                                                       CustomFilter, MigrationFilterFactory, LoadAndProfilingPairFilter)
 from llumnix.global_scheduler.migration_policy import MigrationPolicyFactory, MigrationPolicy
 from llumnix.utils import MigrationType, InstanceType
 from llumnix.internal_config import DispatchLoadMetricConfig
@@ -36,7 +36,9 @@ class MigrationScheduler:
                  enable_bladellm_engine_semi_pd_disagg: bool,
                  enable_adaptive_pd: bool,
                  dispatch_load_metric_config: DispatchLoadMetricConfig,
-                 enable_pre_stop_migration: bool) -> None:
+                 enable_pre_stop_migration: bool,
+                 gpu_p2p_profiler=None,
+                 max_transfer_time_threshold: Optional[float] = None) -> None:
         self.pair_migration_policy = pair_migration_policy
         self.enable_pd_disagg = enable_pd_disagg
         self.enable_vllm_v1_engine_pd_disagg = enable_vllm_v1_engine_pd_disagg
@@ -46,11 +48,19 @@ class MigrationScheduler:
         self.dispatch_load_metric_config = dispatch_load_metric_config
         self.enable_pre_stop_migration = enable_pre_stop_migration
 
-        self.filter_config = MigrationFilterConfig(migrate_out_load_threshold=migrate_out_load_threshold)
+        self.filter_config = MigrationFilterConfig(
+            migrate_out_load_threshold=migrate_out_load_threshold,
+            gpu_p2p_profiler=gpu_p2p_profiler,
+            max_transfer_time_threshold=max_transfer_time_threshold,
+        )
         self.migration_base_filter = MigrationFilterPipeline(self.filter_config)
         self._register_migration_backend_init_filter(is_group_kind_migration_backend)
         self._register_new_instance_filter()
         self._register_has_migration_slot_filter()
+
+        self.p2p_pair_filter: Optional[LoadAndProfilingPairFilter] = None
+        if gpu_p2p_profiler is not None:
+            self.p2p_pair_filter = MigrationFilterFactory.get_filter("load_and_profiling_pair")
 
         self._set_migration_filter()
         self._set_migration_policy()
@@ -280,6 +290,13 @@ class MigrationScheduler:
         src_instance_infos, dst_instance_infos = self.migration_base_filter.filter_instances(
             instance_info.values())
 
+        if self.p2p_pair_filter is not None and self.filter_config.gpu_p2p_profiler is not None:
+            self.p2p_pair_filter.set_instance_infos(src_instance_infos, dst_instance_infos)
+            src_cond = self.p2p_pair_filter.filter_src_condition(self.filter_config)
+            dst_cond = self.p2p_pair_filter.filter_dst_condition(self.filter_config)
+            src_instance_infos = [info for info in src_instance_infos if src_cond(info)]
+            dst_instance_infos = [info for info in dst_instance_infos if dst_cond(info)]
+
         if migration_filter_pipeline:
             src_instance_infos = migration_filter_pipeline.filter_src_instances(src_instance_infos)
             dst_instance_infos = migration_filter_pipeline.filter_dst_instances(dst_instance_infos)
@@ -290,3 +307,10 @@ class MigrationScheduler:
                 f"{src_instance_id} and {dst_instance_id}."
 
         return pair_instance_ids
+
+    def set_gpu_p2p_profiler(self, profiler, max_transfer_time_threshold: Optional[float] = None) -> None:
+        self.filter_config.gpu_p2p_profiler = profiler
+        if max_transfer_time_threshold is not None:
+            self.filter_config.max_transfer_time_threshold = max_transfer_time_threshold
+        if profiler is not None and self.p2p_pair_filter is None:
+            self.p2p_pair_filter = MigrationFilterFactory.get_filter("load_and_profiling_pair")
